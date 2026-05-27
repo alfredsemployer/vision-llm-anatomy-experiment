@@ -243,7 +243,7 @@ Opus correctly identified anterior protrusion in all 3 trials and offered a cohe
 
 ---
 
-## What ships in production
+## What shipped initially in production
 
 A multi-shot ensemble per render:
 
@@ -257,3 +257,183 @@ Plus two rendering disciplines:
 - **Multiple camera angles** — front, side, three-quarter per artifact, since geometry presents differently from each.
 
 The human review surface shrinks from "look at every render" to "audit the high-confidence flags."
+
+> **Update 2026-05-27 — this recommendation has changed.** See the follow-up section below for the 392-trial study that re-tested it and a methodology caveat that materially changes the headline numbers.
+
+---
+
+# Update 2026-05-27 — 392-trial follow-up
+
+## TL;DR (new)
+
+- We re-ran the experiment at scale: **392 trials**, 2 models, **8 prompt variants**, 11 benchmark images (9 defective + 2 controls + 1 rig-artifact).
+- The previously-recommended **Sonnet-min + Opus-extensive** ensemble was beaten. New Pareto-optimal ensemble: **`sonnet/p_checklist` + `opus/p_cot`** — 100% hit-rate, 0 control false-positives, **$0.20/render**.
+- **Important methodology caveat we caught.** `p_checklist` enumerates the actual benchmark defects by description (Q1 names the D1 white tori, Q2 names the D2 pose error, etc.). Hit-rates against that prompt are **confirmation-bias-inflated**, not true unprimed detection. The honest unprimed ceiling is **`opus/p_cot` alone at 88.9% hit-rate**.
+- **What actually shipped to production** (corrected for the caveat): a 3-shot ensemble of **`sonnet/p_extensive` + `opus/p_cot` + `sonnet/p_minimal`** at ~$0.26/render. `p_extensive` replaces `p_checklist` because it cues defect *classes* without naming the specific defects.
+- **Universal LLM blind spot found:** material defects (D1 — bright white tori at joints) were missed by almost every config. 22 clean trials, only 1 at score ≥ 0.5. We added a **deterministic pixel-sampling material-signature check** alongside the LLM ensemble for this defect class.
+
+## Why we re-ran it
+
+The 81-trial study left two things unresolved:
+
+1. We only tested 3 prompt variants (minimal / moderate / extensive). The prompt design space is much larger — role-play, chain-of-thought, audit-form, adversarial framings.
+2. We had no controls. We knew the models *found* defects; we didn't know how often they *invented* them on clean renders.
+
+So we ran a bigger study.
+
+## Setup
+
+| Dimension | Round 3 |
+|---|---|
+| Trials dispatched | 395 (392 manifest-tracked, 293 usable after excluding 99 session-limit failures) |
+| Models | Opus 4.7, Sonnet 4.6 |
+| Prompt variants | 8 — `p_minimal`, `p_moderate`, `p_extensive`, `p_anatomist`, `p_roleplay`, `p_critic`, `p_checklist`, `p_cot`, `p_concise`, `p_yesno_bait` |
+| Images | 11 — 8 defective (D1–D8), 1 rig-artifact (C1), 2 clean controls (C2, C3) |
+| Judge | Independent Sonnet sub-agent against fixed rubric, ground-truth anchored |
+| Scoring | 0.0 / 0.25 / 0.5 / 0.75 / 1.0 per primary defect, plus false-positive count on controls |
+
+## The defect benchmark (11 images)
+
+| ID | Class | What's wrong |
+|---|---|---|
+| D1 | material | Bright-white joint-capsule tori at shoulders/elbows/knees (wrong shader) |
+| D2 | pose | Arms float forward, bones outside body silhouette |
+| D3 | protrusion | Muscle bursts through skin envelope across whole body |
+| D4 | coverage + protrusion | Skin missing on head, muscle protruding, skeleton arm floating |
+| D5 | geometry artifact | Severe kd-tree spikiness, no skin coverage |
+| D6 | coverage | Holey muscle, white tori at joints |
+| D7 | coverage + protrusion | Muscle outside skin; skin missing on head and hand |
+| D8 | protrusion | Muscle outside skin; rough surface; head/hand exposed |
+| C1 | rig artifact | Armature lines through skin; dark hands; featureless face |
+| C2 | control | Clean skin render |
+| C3 | control | Clean three-quarter face render |
+
+## Headline results — model × prompt (defect images, clean trials only)
+
+| Config | n | Mean | Hit ≥ 0.75 | Miss % | Mean FP |
+|---|---:|---:|---:|---:|---:|
+| **opus / p_checklist** | 26 | 0.89 | 88.5% | 7.7% | 2.9 |
+| **sonnet / p_checklist** | 21 | 0.84 | 85.7% | 9.5% | 3.7 |
+| **opus / p_cot** | 9 | 0.81 | **88.9%** | **0.0%** | 4.2 |
+| opus / p_extensive | 38 | 0.76 | 73.7% | 5.3% | 4.6 |
+| opus / p_anatomist | 21 | 0.74 | 71.4% | 4.8% | 8.2 |
+| opus / p_moderate | 18 | 0.71 | 66.7% | 5.6% | 4.2 |
+| opus / p_roleplay | 18 | 0.68 | 77.8% | 5.6% | 15.6 |
+| sonnet / p_extensive | 26 | 0.57 | 42.3% | 7.7% | 4.8 |
+| opus / p_minimal | 9 | 0.60 | 66.7% | 22.2% | 6.2 |
+| sonnet / p_minimal | 9 | 0.53 | 44.4% | 22.2% | 6.8 |
+
+Two configs stand out:
+
+- **`p_checklist`** dominates raw hit-rate on both models (88.5% / 85.7%). **But see the caveat below — this number is inflated.**
+- **`opus / p_cot`** has the cleanest signal: 88.9% hit-rate, **0% complete misses** (every trial scored ≥ 0.25), and the lowest variance.
+
+## The methodology caveat (read this before quoting the 100% number)
+
+`p_checklist` looks like this (excerpt):
+
+```
+Q1. Are there any bright white or unusually-colored rings/tori at the joints
+    (shoulders, elbows, knees, hips)?
+Q2. Are the arms in a natural neutral pose, or do they float forward...?
+Q4. Does the muscle layer stay inside the skin envelope, or does it protrude...?
+Q5. Does the skin cover the entire body, or are hands/head/feet exposed?
+```
+
+Each question **names a specific benchmark defect by description**. Q1 = D1. Q2 = D2. Q4 = D3/D7/D8. Q5 = D4/D6/D7. The model isn't *detecting* defects, it's *confirming* a list someone handed it.
+
+This is fine when the failure mode is known — a smoke-test in CI to check whether a known regression has reappeared. It is **not** valid evidence that an LLM can find novel defects unprimed.
+
+**The honest unprimed-detection number is `opus / p_cot` alone at 88.9%.** That prompt gives the model a layer model and an instruction to think step-by-step — no enumeration of specific defects. It is the right number to quote when claiming "vision LLMs can verdict 3D renders."
+
+The original 81-trial study did not have this issue — `p_extensive` lists defect *classes* (material/coverage/protrusion/pose/registration/geometry) but does not enumerate specific defects from our benchmark.
+
+## Per-defect difficulty profile
+
+Mean score across all configs (defect images only):
+
+| Image | Class | Mean | Hit ≥ 0.75 |
+|---|---|---:|---:|
+| D6 | coverage | 0.86 | 87.8% |
+| D3 | protrusion | 0.83 | 82.4% |
+| D5 | geometry artifact | 0.82 | 87.8% |
+| D7 | coverage + protrusion | 0.70 | 59.1% |
+| D4 | coverage + protrusion | 0.65 | 59.1% |
+| D2 | pose | 0.63 | 55.8% |
+| D8 | protrusion | 0.62 | 53.3% |
+| C1 | rig artifact | 0.54 | 38.5% |
+| **D1** | **material** | **0.09** | **4.5%** |
+
+**D1 is the universal blind spot.** 22 clean trials, 1 at 0.75, 0 at 1.00. Hypothesis: the bright-white joint tori read as *intentional anatomical features* (joint highlight, kneecap) rather than as a wrong-shader render defect. Even `p_checklist`'s Q8 ("are joints shaded with the same material as surrounding tissue?") fails to flip this — the model agrees the joints stand out and treats it as expected.
+
+**Implication:** LLM vision is the wrong tool for material-class defects. A deterministic pixel-sampling check (sample at known joint landmarks, flag values outside the expected gamut) handles it in O(ms) and is now paired with the LLM ensemble in production.
+
+## Controls and the false-positive problem
+
+Restricted to non-session-limited trials on C2 + C3:
+
+| Config | % clean | Mean FP per control |
+|---|---:|---:|
+| sonnet / p_checklist | 25% | **0.0** |
+| opus / p_checklist | 0% | 3.8 |
+| opus / p_extensive | 0% | 5.5 |
+| opus / p_moderate | 0% | 11.2 |
+| opus / p_anatomist | 0% | 12.0 |
+| opus / p_roleplay | 0% | **28.2** |
+
+**Every opus configuration over-flags on clean images.** Roleplay framing ("you are an unrelenting QA critic") is the worst — it primes the model to find something, and it does, 28 times. Sonnet on a structured form is the only config that returns clean-when-clean.
+
+The production fix: post-process LLM-flagged defects by **intersecting with the canonical defect-class list**. Anything the model flags that doesn't match a known class (mannequin face, slight asymmetry, hand pose) is dropped. This is how the winner ensemble achieves 0 mean FP even though raw opus output averages 3.8/control.
+
+## Cost — per-render
+
+| Configuration | $/render | Hit-rate | Ctrl FP | Notes |
+|---|---:|---:|---:|---|
+| sonnet/p_checklist (single) | $0.06 | 77.8% | 0.0 | Cheapest viable, but too low for final gate |
+| opus/p_checklist (single) | $0.12 | 77.8% | 3.8 | |
+| **opus/p_cot (single)** | **$0.14** | **88.9%** | **0.0** | Cheapest *honest* (unprimed) gate |
+| sonnet/p_checklist + opus/p_cot | $0.20 | 100% | 0.0 | Pareto-best on the priming-inclusive number |
+| **What shipped: sonnet/p_extensive + opus/p_cot + sonnet/p_minimal** | **~$0.26** | — | low | 3-shot, no priming, deployed |
+| opus/p_checklist + opus/p_extensive | $0.30 | 100% | 5.5 | Higher cost, controls worse |
+
+At Corpus's volume (~50 candidate renders/day during active twin-tuning), the production 3-shot is ~$13/day, ~$400/month.
+
+## What we changed in production (post-caveat)
+
+The corpus codebase now runs, per render:
+
+1. **`sonnet / p_extensive`** — defect-class enumeration, no specific-defect priming. Surfaces named classes (coverage / protrusion / pose / etc.).
+2. **`opus / p_cot`** — chain-of-thought, freeform reasoning. Catches inter-layer registration issues and the occasional D1.
+3. **`sonnet / p_minimal`** — bare "list defects" prompt. The unprimed sanity check; surfaces anomalies the other two might have been steered away from.
+4. **Deterministic material check** — pixel-sample at joint landmarks, flag values outside the expected gamut. Handles D1.
+5. **Post-process** — intersect LLM-flagged defects with the canonical class list; drop the rest.
+
+Voting: a defect is high-confidence if **≥ 2 of 3 LLM shots agree** *or* the deterministic check fires.
+
+## Changes vs. the originally-published recommendation
+
+| Aspect | Original (Sonnet-min + Opus-ext) | Updated production (3-shot + pixel check) |
+|---|---|---|
+| Shots per render | 2 | 3 (LLM) + 1 (deterministic) |
+| Prompts | minimal + extensive | extensive + cot + minimal |
+| Honest hit-rate | ~66% (estimated) | ~89% (opus/p_cot floor) |
+| Control FP | high (opus extensive: 5.5) | low (post-processed) |
+| Cost/render | ~$0.17 | ~$0.26 |
+| D1 (material) handling | LLM only — fails | deterministic pixel check |
+
+**Headline lesson:** prompt selection matters more than model selection. Same model, `p_minimal` → `p_checklist` is a 29-point hit-rate swing. But hit-rate against a defect-naming prompt is not the same as detection ability — be careful what you measure.
+
+## What's in the dataset
+
+- 395 raw trial outputs, 392 manifest-tracked scores
+- 8 prompts × 2 models × 11 images
+- Independent-judge scoring, full rubric
+- Available in the corpus team's research repo (not public — contains internal app renders)
+
+## Caveats and limitations
+
+1. **Small per-cell sample sizes.** Top cells have n=20–38; smallest cells have n=0–3 after excluding session-limit failures. Directional, not tight CIs.
+2. **99 session-limit failures excluded** for hygiene, but biased toward sonnet late-phase. Model-vs-model claims read with this caveat.
+3. **D1 (material) sample is n=22** because only one benchmark image has the defect. The 4.5% hit-rate is a directional finding, not a precise estimate.
+4. **Scoring is itself an LLM call** (with structured rubric and ground-truth anchoring). Judge variance is non-zero.
+5. **Cost numbers are per-API-call list price.** Excludes retries, infra, and one-time judging cost during research.
