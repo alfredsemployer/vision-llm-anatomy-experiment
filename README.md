@@ -29,7 +29,7 @@ Three actual defective renders from the current build. Each is one PNG, ≈600�
 
 Bright white rings at each shoulder. Procedural joint capsules at the glenohumeral joint were assigned the bone material instead of the connective-tissue material.
 
-*Image: `t1-skeleton-with-tori.png` — included in this gist as a binary file.*
+![T1 — skeleton front view with white ring artifacts at shoulders](t1-skeleton-with-tori.png)
 
 ### T2 — Muscle protruding past the skin envelope
 
@@ -41,7 +41,7 @@ The kd-tree skin-derivation algorithm fails to pull skin outward enough; muscle 
 
 Hands and head completely exposed; the skin shell renders as a transparent ghost rather than a continuous envelope.
 
-*Image: `t3-skin-not-covering.png`*
+![T3 — side all-layers view, skin fails to cover body](t3-skin-not-covering.png)
 
 ---
 
