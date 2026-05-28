@@ -154,7 +154,55 @@ The outgoing CEO never fully resolved this: **the deterministic checks measure c
 3. **Procedural mesh repair authorization** for the remaining source-data gaps (MakeHuman skin seam, Z-Anatomy frontDelt extension, rectus xiphoid extension)
 4. **Stage 2 mobile** strategy — Capacitor wrapper, Apple dev account ownership
 
-## Final caveat
+## UPDATE 2026-05-28 — chairman walked through the substrate by eye, flagged 5 specific defects, fresh audit landed
+
+After the handover above was written, the chairman flagged five specific defects on the substrate (`867127d`) that the gate stack reports as 100% PASS:
+
+1. Muscle connecting the hips and hands (single muscle mesh spanning hip → wrist)
+2. Muscle inside the back of the ribs (vertices in the thoracic cavity)
+3. Muscle between chest and upper arms (axilla web)
+4. Most of the hand is missing muscle
+5. Protruding connective tissue and muscle far outside the neck
+
+A fresh Opus audit was dispatched and committed at `_inbox/checks-defects-audit-2026-05-28.md` (commit `742b501`). **Two methodology classes cause 4 of 5 defects:**
+
+### Methodology bug #1 — endpoint-only muscle check (C6)
+`scripts/check-coregistration.mjs` C6 only verifies "do the muscle endpoints touch the right bones?" — it says nothing about where the rest of the polygon mesh goes. A muscle whose endpoints are at hip + hand can pass C6 even though the mesh polygon bridges two unrelated anatomical regions. Fix in progress: new `C6-AXIS-{group}` gate constraining mid-mesh perp deviation from the origin→insertion line.
+
+### Methodology bug #2 — K=128 opposite-side projection cheat in C1/C4
+`scripts/check-containment.mjs` lines 632-647 openly admit a "trick": for each muscle vertex, the check picks the K=128 nearest skin verts and projects via their normals — including the **opposite-side** skin face. This falsely calls deep / distal protrusions "inside" by routing through the opposite-side skin surface. Causes defects 2 + 5 directly. Fix in progress: `C1-STRICT` — same-side, Y-banded skin-normal projection only.
+
+### Plus: C3's exemption fraction is 76%
+`isHandZoneC3` + `isFaceZoneC3` + `isFootZoneC3` smoothstep ramps deliberately exempt the hand/face/foot regions from C3 skin-outside-muscle. **This makes C3 silent on the very regions where the chairman's visible defects appear.** Fix in progress: top-level assertion that fails any check exempting >30% of its sample space.
+
+### My cardinal error — the symmetric "excuse" pattern
+
+I dismissed the 3-shot LLM ensemble's "hands missing muscle" finding (Sonnet+extensive + Sonnet+minimal, ≥2-of-3 quorum) by saying "Sonnet misreads translucent rendering — C3 PROVES skin covers muscle." But **C3's hand-zone exemption deliberately skips the hand.** C3 said nothing about the hand. I leaned on a vacuously-true gate to overrule a real defect.
+
+Saved as new memory: `feedback_dont_overrule_llm_with_passing_check.md`. **Don't do this.** When LLM ensemble flags a region and a gate "passes," check the gate's exemption table before dismissing.
+
+### New gates being implemented (Builder-PHI in flight as of 2026-05-28)
+
+Per the audit's recommendations:
+
+- `C6-AXIS-{group}` — mid-mesh perp distance from origin→insertion line (catches defects 1, 3)
+- `C9-COVERAGE-{region}` — regional muscle-coverage ratio across 14 named regions, no closure-hidden exemptions (catches defects 4, 5)
+- `C8-CAVITY-{thoracic, axilla-L/R, cranial}` — no muscle/CT inside named hollow volumes (catches defects 2, 3)
+- `C1-STRICT` — replace K=128 opposite-side cheat with same-side Y-banded projection (catches defects 2, 5)
+- `C7-MUSCLE-{region}` — named-muscle presence per region (currently C7 only counts bones; hand has zero muscle and C7 doesn't notice)
+- `C3-EXEMPTION-FRACTION` guard — fail any check exempting >30% of its sample space
+
+After the new gates expose failures deterministically, PHI will fix the underlying substrate (likely: a bad muscle attachment in `muscleAttachments.ts` for the hip-to-hand bridge, mesh placement constraint to stay outside thoracic cavity, hand muscle ingestion from another source, neck CT/muscle attachment fix).
+
+### What this means for you (fresh Claude)
+
+If PHI lands successfully, the substrate will be measurably better against gates that actually measure what they should. If PHI partial-lands or hits new defects, you'll need to continue the iteration. **The cardinal rule going forward: an LLM-ensemble high-confidence defect at a specific region trumps any passing gate whose exemption table covers that region. Verify exemption scope before dismissing.**
+
+The chairman's eye remains the ground truth. The renders at `_inbox/renders/builder-omega2/phase-C/` showed visible defects despite gates reporting 100%. Don't repeat that pattern.
+
+---
+
+## Final caveat (original)
 
 The outgoing CEO accumulated a track record of saying things were done when they weren't. The CEO-Manager audit `_inbox/ceo-manager-audit-2026-05-27.md` is the corrective. Read it. Don't repeat the pattern.
 
